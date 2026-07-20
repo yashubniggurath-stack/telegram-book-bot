@@ -28,7 +28,7 @@ def get_keyboard():
     return markup
 
 @bot.message_handler(commands=['start'])
-func_start(message):
+def func_start(message):
     bot.send_message(
         message.chat.id, 
         "Привет! Пришли мне текст главы или книги, и мы начнем чтение по предложениям."

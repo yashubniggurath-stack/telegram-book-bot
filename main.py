@@ -5,7 +5,7 @@ import re
 import requests
 import threading
 from flask import Flask
-from google import genai
+from openai import OpenAI
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 # Веб-сервер для удержания открытого порта на Render
@@ -25,9 +25,15 @@ threading.Thread(target=run_web, daemon=True).start()
 TOKEN = os.environ.get("BOT_TOKEN")
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 
 bot = telebot.TeleBot(TOKEN)
-ai_client = genai.Client()
+
+# Инициализируем клиента Groq
+ai_client = OpenAI(
+    api_key=GROQ_API_KEY,
+    base_url="https://api.groq.com/openai/v1"
+)
 
 headers = {
     "apikey": SUPABASE_KEY,
@@ -77,14 +83,24 @@ def get_ai_analysis(sentence):
         f"🇷🇺 **Перевод:** [Естественный перевод на русский]\n"
         f"💡 **Разбор:** [Кратко объясни грамматику, форму глаголов или интересные конструкции, если они есть]"
     )
+    
+    # Сначала пробуем основную, умную модель (70b)
     try:
-        response = ai_client.models.generate_content(
-            model='gemini-2.0-flash',
-            contents=prompt,
+        response = ai_client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[{"role": "user", "content": prompt}]
         )
-        return response.text
-    except Exception as e:
-        return f"⚠️ Ошибка запроса к API: {e}"
+        return response.choices[0].message.content
+    except Exception:
+        # Если лимит исчерпан или ошибка, мгновенно подстраховываемся быстрой моделью (8b-instant)
+        try:
+            response = ai_client.chat.completions.create(
+                model="llama-3.1-8b-instant",
+                messages=[{"role": "user", "content": prompt}]
+            )
+            return response.choices[0].message.content
+        except Exception as e2:
+            return f"⚠️ Ошибка запроса к API: {e2}"
 
 def load_user_data(chat_id):
     url = f"{SUPABASE_URL}/rest/v1/book_progress?chat_id=eq.{chat_id}"

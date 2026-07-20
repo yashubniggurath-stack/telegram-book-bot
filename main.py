@@ -93,5 +93,7 @@ def callback_inline(call):
     bot.answer_callback_query(call.id)
 
 if __name__ == "__main__":
+    print("Сбрасываем старый вебхук...")
+    bot.remove_webhook()
     print("Бот запущен и ждет сообщения...")
     bot.infinity_polling()

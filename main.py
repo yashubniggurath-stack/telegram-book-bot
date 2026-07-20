@@ -1,24 +1,22 @@
 import os
 import telebot
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 TOKEN = os.environ.get("BOT_TOKEN")
 bot = telebot.TeleBot(TOKEN)
 
-# Простые словари в памяти для хранения текста книги и индекса текущего предложения для каждого пользователя
 user_sentences = {}
 user_index = {}
 
-# Функция для разбиения текста на предложения
 def split_into_sentences(text):
     import re
-    # Умное разбиение по точкам, восклицательным и вопросительным знакам
     sentences = re.split(r'(?<=[.!?])\s+', text.strip())
     if not sentences or sentences == ['']:
         return [text]
     return [s.strip() for s in sentences if s.strip()]
 
-# Генерация инлайн-клавиатуры
 def get_keyboard():
     markup = InlineKeyboardMarkup()
     markup.row(
@@ -34,7 +32,6 @@ def func_start(message):
         "Привет! Пришли мне текст главы или книги, и мы начнем чтение по предложениям."
     )
 
-# Обработка входящего текста книги
 @bot.message_handler(func=lambda message: True)
 def handle_text(message):
     chat_id = message.chat.id
@@ -51,7 +48,6 @@ def handle_text(message):
     response = f"Книга загружена ({len(sentences)} предложений)!\n\nПредложение №1\n\n{first_sentence}"
     bot.send_message(chat_id, response, reply_markup=get_keyboard())
 
-# Обработка нажатий на кнопки
 @bot.callback_query_handler(func=lambda call: True)
 def callback_inline(call):
     chat_id = call.message.chat.id
@@ -73,7 +69,6 @@ def callback_inline(call):
         if idx > 0:
             idx -= 1
         else:
-        # Версионируем индекс обратно в глобальный словарь
             bot.answer_callback_query(call.id, "Это первое предложение.")
             return
             
@@ -92,7 +87,24 @@ def callback_inline(call):
         
     bot.answer_callback_query(call.id)
 
+# --- ФЕЙКОВЫЙ СЕРВЕР ДЛЯ RENDER ---
+class HealthCheckHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"Bot is running!")
+
+def run_server():
+    # Render автоматически задает переменную PORT
+    port = int(os.environ.get("PORT", 8080))
+    server = HTTPServer(("0.0.0.0", port), HealthCheckHandler)
+    server.serve_forever()
+# ----------------------------------
+
 if __name__ == "__main__":
+    # Запускаем сервер-заглушку в параллельном потоке
+    threading.Thread(target=run_server, daemon=True).start()
+    
     print("Сбрасываем старый вебхук...")
     bot.remove_webhook()
     print("Бот запущен и ждет сообщения...")

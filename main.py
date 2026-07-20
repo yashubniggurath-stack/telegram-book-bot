@@ -1,99 +1,156 @@
 import os
+import json
 import telebot
-import threading
-from http.server import BaseHTTPRequestHandler, HTTPServer
+import re
+import requests
+from google import genai
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 TOKEN = os.environ.get("BOT_TOKEN")
+SUPABASE_URL = os.environ.get("SUPABASE_URL")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
+
 bot = telebot.TeleBot(TOKEN)
+ai_client = genai.Client()
 
-user_sentences = {}
-user_index = {}
-
-# def split_into_sentences(text):
-#    import re
-#    sentences = re.split(r'(?<=[.!?])\s+', text.strip())
-#    if not sentences or sentences == ['']:
-#        return [text]
-#    return [s.strip() for s in sentences if s.strip()]
-
-import re
+# Заголовки для запросов к Supabase API
+headers = {
+    "apikey": SUPABASE_KEY,
+    "Authorization": f"Bearer {SUPABASE_KEY}",
+    "Content-Type": "application/json",
+    "Prefer": "resolution=merge-duplicates"
+}
 
 def split_into_sentences(text):
-    # Расширенный список немецких сокращений с точками (и английских тоже)
     abbreviations = [
         "Mr", "Mrs", "Dr", "Prof", "Sr", "Jr",
         "Hr", "Fr", "bzw", "z.B", "d.h", "inkl", "ca", 
         "vgl", "bspw", "usw", "z.T", "S", "Nr"
     ]
-    
     processed_text = text
     for abbr in abbreviations:
-        # Заменяем точку в сокращении на маркер, чтобы она не считалась концом предложения
         processed_text = processed_text.replace(f"{abbr}.", f"{abbr}<dot>")
-
-    # Также защитим случаи вроде "z. B." (с пробелом)
     processed_text = processed_text.replace("z. B.", "z<dot>B<dot>")
 
-    # Разбиваем по знакам препинания (. ! ?), за которыми идет пробел и заглавная буква
-    # Это позволяет корректно разделять длинные абзацы на предложения
     raw_sentences = re.split(r'(?<=[.!?])\s+(?=[A-ZÄÖÜa-zäöüß])', processed_text)
     
     sentences = []
     for s in raw_sentences:
-        # Возвращаем точки на место
         restored = s.replace("<dot>", ".")
         cleaned = restored.strip()
         if cleaned:
             sentences.append(cleaned)
-            
     return sentences
 
-
-def get_keyboard():
+def get_keyboard(idx, total):
     markup = InlineKeyboardMarkup()
-    markup.row(
-        InlineKeyboardButton("⬅️ Назад", callback_data="prev"),
-        InlineKeyboardButton("Далее ➡️", callback_data="next")
-    )
+    buttons = []
+    if idx > 0:
+        buttons.append(InlineKeyboardButton("⬅️ Назад", callback_data="prev"))
+    if idx < total - 1:
+        buttons.append(InlineKeyboardButton("Далее ➡️", callback_data="next"))
+    if buttons:
+        markup.row(*buttons)
     return markup
+
+def get_ai_analysis(sentence):
+    prompt = (
+        f"Ты — личный репетитор по немецкому языку для уровня A2. "
+        f"Разбери следующее предложение из книги:\n\n\"{sentence}\"\n\n"
+        f"Дай ответ в таком формате:\n"
+        f"🇩🇪 **Оригинал:** {sentence}\n"
+        f"🇷🇺 **Перевод:** [Естественный перевод на русский]\n"
+        f"💡 **Разбор:** [Кратко объясни грамматику, форму глаголов или интересные конструкции, если они есть]"
+    )
+    try:
+        response = ai_client.models.generate_content(
+            model='gemini-2.5-flash',
+            contents=prompt,
+        )
+        return response.text
+    except Exception as e:
+        return f"⚠️ Ошибка запроса к API: {e}"
+
+# Функции работы с базой Supabase
+def load_user_data(chat_id):
+    url = f"{SUPABASE_URL}/rest/v1/book_progress?chat_id=eq.{chat_id}"
+    resp = requests.get(url, headers=headers)
+    if resp.status_code == 200 and resp.json():
+        data = resp.json()[0]
+        return data.get("sentences"), data.get("current_index", 0), data.get("cache", {})
+    return None, 0, {}
+
+def save_user_data(chat_id, sentences, current_index, cache):
+    url = f"{SUPABASE_URL}/rest/v1/book_progress"
+    payload = {
+        "chat_id": chat_id,
+        "sentences": sentences,
+        "current_index": current_index,
+        "cache": cache
+    }
+    requests.post(url, headers=headers, json=payload)
 
 @bot.message_handler(commands=['start'])
 def func_start(message):
     bot.send_message(
         message.chat.id, 
-        "Привет! Пришли мне текст главы или книги, и мы начнем чтение по предложениям."
+        "Привет! Пришли с компьютера `.txt` файл книги целиком. "
+        "Она сохранится в облаке, и ты сможешь читать её с телефона в любой момент с полным сохранением прогресса."
     )
 
-@bot.message_handler(func=lambda message: True)
-def handle_text(message):
+@bot.message_handler(content_types=['document'])
+def handle_document(message):
     chat_id = message.chat.id
-    text = message.text
+    doc = message.document
     
-    if text.startswith('/'):
+    if not doc.file_name.endswith('.txt'):
+        bot.send_message(chat_id, "⚠️ Пожалуйста, отправь файл в формате `.txt`")
         return
+        
+    try:
+        file_info = bot.get_file(doc.file_id)
+        downloaded_file = bot.download_file(file_info.file_path)
+        try:
+            text = downloaded_file.decode('utf-8')
+        except UnicodeDecodeError:
+            text = downloaded_file.decode('cp1251')
+            
+        sentences = split_into_sentences(text)
+        if not sentences:
+            bot.send_message(chat_id, "⚠️ Не удалось найти предложения в файле.")
+            return
 
-    sentences = split_into_sentences(text)
-    user_sentences[chat_id] = sentences
-    user_index[chat_id] = 0
-    
-    first_sentence = sentences[0]
-    response = f"Книга загружена ({len(sentences)} предложений)!\n\nПредложение №1\n\n{first_sentence}"
-    bot.send_message(chat_id, response, reply_markup=get_keyboard())
+        msg = bot.send_message(chat_id, f"📥 Книга загружена ({len(sentences)} предложений). Обрабатываю первое...")
+        
+        # Генерируем первое предложение
+        first_analysis = get_ai_analysis(sentences[0])
+        cache = {"0": first_analysis}
+        
+        # Сохраняем в Supabase
+        save_user_data(chat_id, sentences, 0, cache)
+        
+        bot.edit_message_text(
+            chat_id=chat_id,
+            message_id=msg.message_id,
+            text=first_analysis,
+            reply_markup=get_keyboard(0, len(sentences))
+        )
+    except Exception as e:
+        bot.send_message(chat_id, f"⚠️ Ошибка при обработке файла: {e}")
 
 @bot.callback_query_handler(func=lambda call: True)
 def callback_inline(call):
     chat_id = call.message.chat.id
     
-    if chat_id not in user_sentences:
-        bot.answer_callback_query(call.id, "Сначала отправь текст книги!")
+    sentences, idx, cache = load_user_data(chat_id)
+    if not sentences:
+        bot.answer_callback_query(call.id, "Книга не найдена в базе. Загрузите файл с ПК!")
         return
         
-    sentences = user_sentences[chat_id]
-    idx = user_index.get(chat_id, 0)
+    total = len(sentences)
     
     if call.data == "next":
-        if idx < len(sentences) - 1:
+        if idx < total - 1:
             idx += 1
         else:
             bot.answer_callback_query(call.id, "Это последнее предложение.")
@@ -105,40 +162,26 @@ def callback_inline(call):
             bot.answer_callback_query(call.id, "Это первое предложение.")
             return
             
-    user_index[chat_id] = idx
-    response = f"Предложение №{idx + 1}\n\n{sentences[idx]}"
+    idx_str = str(idx)
+    if idx_str in cache:
+        analysis = cache[idx_str]
+    else:
+        analysis = get_ai_analysis(sentences[idx])
+        cache[idx_str] = analysis
+        
+    # Обновляем индекс и кэш в базе
+    save_user_data(chat_id, sentences, idx, cache)
     
     try:
         bot.edit_message_text(
             chat_id=chat_id,
             message_id=call.message.message_id,
-            text=response,
-            reply_markup=get_keyboard()
+            text=analysis,
+            reply_markup=get_keyboard(idx, total)
         )
     except Exception:
         pass
         
     bot.answer_callback_query(call.id)
 
-# --- ФЕЙКОВЫЙ СЕРВЕР ДЛЯ RENDER ---
-class HealthCheckHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.end_headers()
-        self.wfile.write(b"Bot is running!")
-
-def run_server():
-    # Render автоматически задает переменную PORT
-    port = int(os.environ.get("PORT", 8080))
-    server = HTTPServer(("0.0.0.0", port), HealthCheckHandler)
-    server.serve_forever()
-# ----------------------------------
-
-if __name__ == "__main__":
-    # Запускаем сервер-заглушку в параллельном потоке
-    threading.Thread(target=run_server, daemon=True).start()
-    
-    print("Сбрасываем старый вебхук...")
-    bot.remove_webhook()
-    print("Бот запущен и ждет сообщения...")
-    bot.infinity_polling()
+bot.infinity_polling()

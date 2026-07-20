@@ -8,7 +8,7 @@ from flask import Flask
 from google import genai
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-# Веб-сервер для заглушки порта на Render
+# Веб-сервер для удержания открытого порта на Render
 app = Flask(__name__)
 
 @app.route('/')
@@ -19,7 +19,7 @@ def run_web():
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
 
-# Запускаем веб-сервер в отдельном потоке
+# Запуск веб-сервера в фоновом потоке
 threading.Thread(target=run_web, daemon=True).start()
 
 TOKEN = os.environ.get("BOT_TOKEN")
@@ -79,7 +79,7 @@ def get_ai_analysis(sentence):
     )
     try:
         response = ai_client.models.generate_content(
-            model='gemini-2.0-flash', # Актуальная рабочая модель
+            model='gemini-2.0-flash',
             contents=prompt,
         )
         return response.text
@@ -125,13 +125,13 @@ def process_and_start(chat_id, text):
     )
 
 @bot.message_handler(commands=['start'])
-func_start = lambda message: bot.send_message(
-    message.chat.id, 
-    "Привет! Пришли файл книги (`.txt`) с компьютера или отправь произвольный текст сообщением — "
-    "и мы начнем пошаговый разбор с сохранением в облаке."
-)
+def func_start(message):
+    bot.send_message(
+        message.chat.id, 
+        "Привет! Пришли файл книги (`.txt`) с компьютера или отправь произвольный текст сообщением — "
+        "и мы начнем пошаговый разбор с сохранением в облаке."
+    )
 
-# Возвращаем обработку обычного текста (для толкования произвольных фрагментов)
 @bot.message_handler(content_types=['text'])
 def handle_text(message):
     if message.text.startswith('/'):

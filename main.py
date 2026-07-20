@@ -3,8 +3,24 @@ import json
 import telebot
 import re
 import requests
+import threading
+from flask import Flask
 from google import genai
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
+
+# Веб-сервер для заглушки порта на Render
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "Bot is alive!"
+
+def run_web():
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
+
+# Запускаем веб-сервер в отдельном потоке
+threading.Thread(target=run_web, daemon=True).start()
 
 TOKEN = os.environ.get("BOT_TOKEN")
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
@@ -13,7 +29,6 @@ SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 bot = telebot.TeleBot(TOKEN)
 ai_client = genai.Client()
 
-# Заголовки для запросов к Supabase API
 headers = {
     "apikey": SUPABASE_KEY,
     "Authorization": f"Bearer {SUPABASE_KEY}",
@@ -64,14 +79,13 @@ def get_ai_analysis(sentence):
     )
     try:
         response = ai_client.models.generate_content(
-            model='gemini-2.5-flash',
+            model='gemini-2.0-flash', # Актуальная рабочая модель
             contents=prompt,
         )
         return response.text
     except Exception as e:
         return f"⚠️ Ошибка запроса к API: {e}"
 
-# Функции работы с базой Supabase
 def load_user_data(chat_id):
     url = f"{SUPABASE_URL}/rest/v1/book_progress?chat_id=eq.{chat_id}"
     resp = requests.get(url, headers=headers)
@@ -90,13 +104,39 @@ def save_user_data(chat_id, sentences, current_index, cache):
     }
     requests.post(url, headers=headers, json=payload)
 
-@bot.message_handler(commands=['start'])
-def func_start(message):
-    bot.send_message(
-        message.chat.id, 
-        "Привет! Пришли с компьютера `.txt` файл книги целиком. "
-        "Она сохранится в облаке, и ты сможешь читать её с телефона в любой момент с полным сохранением прогресса."
+def process_and_start(chat_id, text):
+    sentences = split_into_sentences(text)
+    if not sentences:
+        bot.send_message(chat_id, "⚠️ Не удалось найти предложения в тексте.")
+        return
+
+    msg = bot.send_message(chat_id, f"📥 Текст загружен ({len(sentences)} предложений). Обрабатываю первое...")
+    
+    first_analysis = get_ai_analysis(sentences[0])
+    cache = {"0": first_analysis}
+    
+    save_user_data(chat_id, sentences, 0, cache)
+    
+    bot.edit_message_text(
+        chat_id=chat_id,
+        message_id=msg.message_id,
+        text=first_analysis,
+        reply_markup=get_keyboard(0, len(sentences))
     )
+
+@bot.message_handler(commands=['start'])
+func_start = lambda message: bot.send_message(
+    message.chat.id, 
+    "Привет! Пришли файл книги (`.txt`) с компьютера или отправь произвольный текст сообщением — "
+    "и мы начнем пошаговый разбор с сохранением в облаке."
+)
+
+# Возвращаем обработку обычного текста (для толкования произвольных фрагментов)
+@bot.message_handler(content_types=['text'])
+def handle_text(message):
+    if message.text.startswith('/'):
+        return
+    process_and_start(message.chat.id, message.text)
 
 @bot.message_handler(content_types=['document'])
 def handle_document(message):
@@ -115,28 +155,9 @@ def handle_document(message):
         except UnicodeDecodeError:
             text = downloaded_file.decode('cp1251')
             
-        sentences = split_into_sentences(text)
-        if not sentences:
-            bot.send_message(chat_id, "⚠️ Не удалось найти предложения в файле.")
-            return
-
-        msg = bot.send_message(chat_id, f"📥 Книга загружена ({len(sentences)} предложений). Обрабатываю первое...")
-        
-        # Генерируем первое предложение
-        first_analysis = get_ai_analysis(sentences[0])
-        cache = {"0": first_analysis}
-        
-        # Сохраняем в Supabase
-        save_user_data(chat_id, sentences, 0, cache)
-        
-        bot.edit_message_text(
-            chat_id=chat_id,
-            message_id=msg.message_id,
-            text=first_analysis,
-            reply_markup=get_keyboard(0, len(sentences))
-        )
+        process_and_start(chat_id, text)
     except Exception as e:
-        bot.send_message(chat_id, f"⚠️ Ошибка при обработке файла: {e}")
+        bot.send_message(chat_id, f"⚠️ Ошибка при чтении файла: {e}")
 
 @bot.callback_query_handler(func=lambda call: True)
 def callback_inline(call):
@@ -144,7 +165,7 @@ def callback_inline(call):
     
     sentences, idx, cache = load_user_data(chat_id)
     if not sentences:
-        bot.answer_callback_query(call.id, "Книга не найдена в базе. Загрузите файл с ПК!")
+        bot.answer_callback_query(call.id, "Данные не найдены в базе. Отправьте текст или файл!")
         return
         
     total = len(sentences)
@@ -169,7 +190,6 @@ def callback_inline(call):
         analysis = get_ai_analysis(sentences[idx])
         cache[idx_str] = analysis
         
-    # Обновляем индекс и кэш в базе
     save_user_data(chat_id, sentences, idx, cache)
     
     try:

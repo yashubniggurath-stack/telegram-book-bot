@@ -77,11 +77,11 @@ def get_keyboard(idx, total):
 def get_ai_analysis(sentence):
     prompt = (
         f"Ты — личный репетитор по немецкому языку для уровня A2. "
-        f"Разбери следующее предложение из книги:\n\n\"{sentence}\"\n\n"
-        f"Дай ответ в таком формате:\n"
-        f"🇩🇪 **Оригинал:** {sentence}\n"
-        f"🇷🇺 **Перевод:** [Естественный перевод на русский]\n"
-        f"💡 **Разбор:** [Кратко объясни грамматику, форму глаголов или интересные конструкции, если они есть]"
+        f"Коротко и емко разбери следующее предложение из книги:\n\n\"{sentence}\"\n\n"
+        f"Выдай ответ строго в таком формате, без лишних вводных слов и меток:\n\n"
+        f"🇩🇪 {sentence}\n\n"
+        f"🇷🇺 [Естественный и точный перевод на русский язык]\n\n"
+        f"💡 [Краткий разбор только ключевых грамматических конструкций или сложных слов, максимум 2-3 предложения без воды]"
     )
     
     # Сначала пробуем основную, умную модель (70b)
@@ -92,7 +92,7 @@ def get_ai_analysis(sentence):
         )
         return response.choices[0].message.content
     except Exception:
-        # Если лимит исчерпан или ошибка, мгновенно подстраховываемся быстрой моделью (8b-instant)
+        # Страховка быстрой моделью (8b-instant)
         try:
             response = ai_client.chat.completions.create(
                 model="llama-3.1-8b-instant",
@@ -101,6 +101,34 @@ def get_ai_analysis(sentence):
             return response.choices[0].message.content
         except Exception as e2:
             return f"⚠️ Ошибка запроса к API: {e2}"
+
+#def get_ai_analysis(sentence):
+ #   prompt = (
+ #       f"Ты — личный репетитор по немецкому языку для уровня A2. "
+ #       f"Разбери следующее предложение из книги:\n\n\"{sentence}\"\n\n"
+ #       f"Дай ответ в таком формате:\n"
+ #       f"🇩🇪 **Оригинал:** {sentence}\n"
+ #       f"🇷🇺 **Перевод:** [Естественный перевод на русский]\n"
+ #       f"💡 **Разбор:** [Кратко объясни грамматику, форму глаголов или интересные конструкции, если они есть]"
+ #   )
+ #   
+ #   # Сначала пробуем основную, умную модель (70b)
+ #   try:
+ #       response = ai_client.chat.completions.create(
+ #           model="llama-3.3-70b-versatile",
+ #           messages=[{"role": "user", "content": prompt}]
+ #       )
+ #       return response.choices[0].message.content
+ #   except Exception:
+ #       # Если лимит исчерпан или ошибка, мгновенно подстраховываемся быстрой моделью (8b-instant)
+ #       try:
+ #           response = ai_client.chat.completions.create(
+ #               model="llama-3.1-8b-instant",
+ #               messages=[{"role": "user", "content": prompt}]
+ #           )
+ #           return response.choices[0].message.content
+ #       except Exception as e2:
+ #           return f"⚠️ Ошибка запроса к API: {e2}"
 
 def load_user_data(chat_id):
     url = f"{SUPABASE_URL}/rest/v1/book_progress?chat_id=eq.{chat_id}"

@@ -10,12 +10,45 @@ bot = telebot.TeleBot(TOKEN)
 user_sentences = {}
 user_index = {}
 
+# def split_into_sentences(text):
+#    import re
+#    sentences = re.split(r'(?<=[.!?])\s+', text.strip())
+#    if not sentences or sentences == ['']:
+#        return [text]
+#    return [s.strip() for s in sentences if s.strip()]
+
+import re
+
 def split_into_sentences(text):
-    import re
-    sentences = re.split(r'(?<=[.!?])\s+', text.strip())
-    if not sentences or sentences == ['']:
-        return [text]
-    return [s.strip() for s in sentences if s.strip()]
+    # Расширенный список немецких сокращений с точками (и английских тоже)
+    abbreviations = [
+        "Mr", "Mrs", "Dr", "Prof", "Sr", "Jr",
+        "Hr", "Fr", "bzw", "z.B", "d.h", "inkl", "ca", 
+        "vgl", "bspw", "usw", "z.T", "S", "Nr"
+    ]
+    
+    processed_text = text
+    for abbr in abbreviations:
+        # Заменяем точку в сокращении на маркер, чтобы она не считалась концом предложения
+        processed_text = processed_text.replace(f"{abbr}.", f"{abbr}<dot>")
+
+    # Также защитим случаи вроде "z. B." (с пробелом)
+    processed_text = processed_text.replace("z. B.", "z<dot>B<dot>")
+
+    # Разбиваем по знакам препинания (. ! ?), за которыми идет пробел и заглавная буква
+    # Это позволяет корректно разделять длинные абзацы на предложения
+    raw_sentences = re.split(r'(?<=[.!?])\s+(?=[A-ZÄÖÜa-zäöüß])', processed_text)
+    
+    sentences = []
+    for s in raw_sentences:
+        # Возвращаем точки на место
+        restored = s.replace("<dot>", ".")
+        cleaned = restored.strip()
+        if cleaned:
+            sentences.append(cleaned)
+            
+    return sentences
+
 
 def get_keyboard():
     markup = InlineKeyboardMarkup()

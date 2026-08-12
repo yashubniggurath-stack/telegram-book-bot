@@ -1,5 +1,4 @@
 import os
-import json
 import telebot
 import re
 import requests
@@ -8,7 +7,7 @@ from flask import Flask
 from openai import OpenAI
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-# Веб-сервер для удержания открытого порта на Render
+# Веб-сервер для удержания активным Render
 app = Flask(__name__)
 
 @app.route('/')
@@ -19,21 +18,16 @@ def run_web():
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
 
-# Запуск веб-сервера в фоновом потоке
 threading.Thread(target=run_web, daemon=True).start()
 
+# Конфигурация
 TOKEN = os.environ.get("BOT_TOKEN")
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 
 bot = telebot.TeleBot(TOKEN)
-
-# Инициализируем клиента Groq
-ai_client = OpenAI(
-    api_key=GROQ_API_KEY,
-    base_url="https://api.groq.com/openai/v1"
-)
+ai_client = OpenAI(api_key=GROQ_API_KEY, base_url="https://api.groq.com/openai/v1")
 
 headers = {
     "apikey": SUPABASE_KEY,
@@ -42,49 +36,39 @@ headers = {
     "Prefer": "resolution=merge-duplicates"
 }
 
+temp_storage = {}
+
 def split_into_sentences(text):
-    abbreviations = [
-        "Mr", "Mrs", "Dr", "Prof", "Sr", "Jr",
-        "Hr", "Fr", "bzw", "z.B", "d.h", "inkl", "ca", 
-        "vgl", "bspw", "usw", "z.T", "S", "Nr"
-    ]
+    abbreviations = ["Mr", "Mrs", "Dr", "Prof", "Sr", "Jr", "Hr", "Fr", "bzw", "z.B", "d.h", "inkl", "ca", "vgl", "bspw", "usw", "z.T", "S", "Nr"]
     processed_text = text
     for abbr in abbreviations:
         processed_text = processed_text.replace(f"{abbr}.", f"{abbr}<dot>")
     processed_text = processed_text.replace("z. B.", "z<dot>B<dot>")
-
     raw_sentences = re.split(r'(?<=[.!?])\s+(?=[A-ZÄÖÜa-zäöüß])', processed_text)
-    
-    sentences = []
-    for s in raw_sentences:
-        restored = s.replace("<dot>", ".")
-        cleaned = restored.strip()
-        if cleaned:
-            sentences.append(cleaned)
-    return sentences
+    return [s.replace("<dot>", ".").strip() for s in raw_sentences if s.strip()]
 
-def get_keyboard(idx, total):
+def get_keyboard(message_id, idx, total):
     markup = InlineKeyboardMarkup()
     buttons = []
     if idx > 0:
-        buttons.append(InlineKeyboardButton("⬅️ Назад", callback_data="prev"))
+        buttons.append(InlineKeyboardButton("⬅️ Назад", callback_data=f"book:{message_id}:prev"))
     if idx < total - 1:
-        buttons.append(InlineKeyboardButton("Далее ➡️", callback_data="next"))
+        buttons.append(InlineKeyboardButton("Далее ➡️", callback_data=f"book:{message_id}:next"))
     if buttons:
         markup.row(*buttons)
     return markup
 
-def get_ai_analysis(sentence):
+def get_ai_analysis(sentence, source_lang):
+    lang_name = "немецкого" if source_lang == "de" else "английского"
     prompt = (
-        f"Ты — личный репетитор по немецкому языку для уровня A2. "
-        f"Коротко и емко разбери следующее предложение из книги:\n\n\"{sentence}\"\n\n"
-        f"Выдай ответ строго в таком формате, без лишних вводных слов и меток:\n\n"
-        f"🇩🇪 {sentence}\n\n\n"
-        f"🇷🇺 [Естественный и точный перевод на русский язык]\n\n—————————————————\n"
-        f"💡 [Краткий разбор только ключевых грамматических конструкций или сложных слов, максимум 3-4 предложения без воды]"
+        f"Ты — личный репетитор по языкам для уровня A2. "
+        f"Разбери это предложение из книги (исходный язык — {lang_name}): \"{sentence}\"\n\n"
+        f"Ответь строго в формате:\n"
+        f"🇷🇺 [Естественный перевод на русский]\n"
+        f"—————————————————\n"
+        f"💡 [Краткий грамматический разбор, максимум 3 предложения]"
     )
     
-    # Сначала пробуем основную, умную модель (70b)
     try:
         response = ai_client.chat.completions.create(
             model="llama-3.3-70b-versatile",
@@ -92,159 +76,79 @@ def get_ai_analysis(sentence):
         )
         return response.choices[0].message.content
     except Exception:
-        # Страховка быстрой моделью (8b-instant)
-        try:
-            response = ai_client.chat.completions.create(
-                model="llama-3.1-8b-instant",
-                messages=[{"role": "user", "content": prompt}]
-            )
-            return response.choices[0].message.content
-        except Exception as e2:
-            return f"⚠️ Ошибка запроса к API: {e2}"
+        response = ai_client.chat.completions.create(
+            model="llama-3.1-8b-instant",
+            messages=[{"role": "user", "content": prompt}]
+        )
+        return response.choices[0].message.content
 
-#def get_ai_analysis(sentence):
- #   prompt = (
- #       f"Ты — личный репетитор по немецкому языку для уровня A2. "
- #       f"Разбери следующее предложение из книги:\n\n\"{sentence}\"\n\n"
- #       f"Дай ответ в таком формате:\n"
- #       f"🇩🇪 **Оригинал:** {sentence}\n"
- #       f"🇷🇺 **Перевод:** [Естественный перевод на русский]\n"
- #       f"💡 **Разбор:** [Кратко объясни грамматику, форму глаголов или интересные конструкции, если они есть]"
- #   )
- #   
- #   # Сначала пробуем основную, умную модель (70b)
- #   try:
- #       response = ai_client.chat.completions.create(
- #           model="llama-3.3-70b-versatile",
- #           messages=[{"role": "user", "content": prompt}]
- #       )
- #       return response.choices[0].message.content
- #   except Exception:
- #       # Если лимит исчерпан или ошибка, мгновенно подстраховываемся быстрой моделью (8b-instant)
- #       try:
- #           response = ai_client.chat.completions.create(
- #               model="llama-3.1-8b-instant",
- #               messages=[{"role": "user", "content": prompt}]
- #           )
- #           return response.choices[0].message.content
- #       except Exception as e2:
- #           return f"⚠️ Ошибка запроса к API: {e2}"
-
-def load_user_data(chat_id):
-    url = f"{SUPABASE_URL}/rest/v1/book_progress?chat_id=eq.{chat_id}"
-    resp = requests.get(url, headers=headers)
-    if resp.status_code == 200 and resp.json():
-        data = resp.json()[0]
-        return data.get("sentences"), data.get("current_index", 0), data.get("cache", {})
-    return None, 0, {}
-
-def save_user_data(chat_id, sentences, current_index, cache):
-    url = f"{SUPABASE_URL}/rest/v1/book_progress"
-    payload = {
-        "chat_id": chat_id,
-        "sentences": sentences,
-        "current_index": current_index,
-        "cache": cache
-    }
+def save_book_to_db(chat_id, message_id, sentences, source_lang, idx, cache):
+    url = f"{SUPABASE_URL}/rest/v1/book_sessions"
+    payload = {"chat_id": chat_id, "message_id": message_id, "sentences": sentences, 
+               "source_lang": source_lang, "current_index": idx, "cache": cache}
     requests.post(url, headers=headers, json=payload)
-
-def process_and_start(chat_id, text):
-    sentences = split_into_sentences(text)
-    if not sentences:
-        bot.send_message(chat_id, "⚠️ Не удалось найти предложения в тексте.")
-        return
-
-    msg = bot.send_message(chat_id, f"📥 Текст загружен ({len(sentences)} предложений). Обрабатываю первое...")
-    
-    first_analysis = get_ai_analysis(sentences[0])
-    cache = {"0": first_analysis}
-    
-    save_user_data(chat_id, sentences, 0, cache)
-    
-    bot.edit_message_text(
-        chat_id=chat_id,
-        message_id=msg.message_id,
-        text=first_analysis,
-        reply_markup=get_keyboard(0, len(sentences))
-    )
 
 @bot.message_handler(commands=['start'])
 def func_start(message):
-    bot.send_message(
-        message.chat.id, 
-        "Привет! Пришли файл книги (`.txt`) с компьютера или отправь произвольный текст сообщением — "
-        "и мы начнем пошаговый разбор с сохранением в облаке."
-    )
+    bot.send_message(message.chat.id, "Привет! Пришли текст или .txt файл книги.")
 
-@bot.message_handler(content_types=['text'])
-def handle_text(message):
-    if message.text.startswith('/'):
-        return
-    process_and_start(message.chat.id, message.text)
-
-@bot.message_handler(content_types=['document'])
-def handle_document(message):
+@bot.message_handler(content_types=['text', 'document'])
+def handle_input(message):
     chat_id = message.chat.id
-    doc = message.document
-    
-    if not doc.file_name.endswith('.txt'):
-        bot.send_message(chat_id, "⚠️ Пожалуйста, отправь файл в формате `.txt`")
-        return
+    text = ""
+    if message.content_type == 'document':
+        file_info = bot.get_file(message.document.file_id)
+        downloaded = bot.download_file(file_info.file_path)
+        text = downloaded.decode('utf-8', errors='ignore')
+    else:
+        text = message.text
         
-    try:
-        file_info = bot.get_file(doc.file_id)
-        downloaded_file = bot.download_file(file_info.file_path)
-        try:
-            text = downloaded_file.decode('utf-8')
-        except UnicodeDecodeError:
-            text = downloaded_file.decode('cp1251')
-            
-        process_and_start(chat_id, text)
-    except Exception as e:
-        bot.send_message(chat_id, f"⚠️ Ошибка при чтении файла: {e}")
+    temp_storage[chat_id] = text
+    markup = InlineKeyboardMarkup()
+    markup.row(InlineKeyboardButton("🇩🇪 Немецкий", callback_data="lang:de"),
+               InlineKeyboardButton("🇬🇧 Английский", callback_data="lang:en"))
+    bot.send_message(chat_id, "Выберите язык книги:", reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda call: True)
-def callback_inline(call):
+def callback_handler(call):
     chat_id = call.message.chat.id
     
-    sentences, idx, cache = load_user_data(chat_id)
-    if not sentences:
-        bot.answer_callback_query(call.id, "Данные не найдены в базе. Отправьте текст или файл!")
-        return
+    if call.data.startswith("lang:"):
+        lang = call.data.split(":")[1]
+        text = temp_storage.get(chat_id)
+        sentences = split_into_sentences(text)
         
-    total = len(sentences)
-    
-    if call.data == "next":
-        if idx < total - 1:
+        ai_resp = get_ai_analysis(sentences[0], lang)
+        flag = "🇩🇪" if lang == "de" else "🇬🇧"
+        final_text = f"{flag} {sentences[0]}\n\n{ai_resp}"
+        
+        save_book_to_db(chat_id, call.message.message_id, sentences, lang, 0, {"0": final_text})
+        bot.edit_message_text(final_text, chat_id, call.message.message_id, reply_markup=get_keyboard(call.message.message_id, 0, len(sentences)))
+        
+    elif call.data.startswith("book:"):
+        _, msg_id, action = call.data.split(":")
+        msg_id = int(msg_id)
+        
+        url = f"{SUPABASE_URL}/rest/v1/book_sessions?message_id=eq.{msg_id}"
+        data = requests.get(url, headers=headers).json()[0]
+        
+        idx = data['current_index']
+        if action == "next" and idx < len(data['sentences']) - 1:
             idx += 1
-        else:
-            bot.answer_callback_query(call.id, "Это последнее предложение.")
-            return
-    elif call.data == "prev":
-        if idx > 0:
+        elif action == "prev" and idx > 0:
             idx -= 1
         else:
-            bot.answer_callback_query(call.id, "Это первое предложение.")
+            bot.answer_callback_query(call.id, "Граница книги.")
             return
             
-    idx_str = str(idx)
-    if idx_str in cache:
-        analysis = cache[idx_str]
-    else:
-        analysis = get_ai_analysis(sentences[idx])
-        cache[idx_str] = analysis
-        
-    save_user_data(chat_id, sentences, idx, cache)
-    
-    try:
-        bot.edit_message_text(
-            chat_id=chat_id,
-            message_id=call.message.message_id,
-            text=analysis,
-            reply_markup=get_keyboard(idx, total)
-        )
-    except Exception:
-        pass
+        cache = data['cache']
+        if str(idx) not in cache:
+            ai_resp = get_ai_analysis(data['sentences'][idx], data['source_lang'])
+            flag = "🇩🇪" if data['source_lang'] == "de" else "🇬🇧"
+            cache[str(idx)] = f"{flag} {data['sentences'][idx]}\n\n{ai_resp}"
+            
+        save_book_to_db(chat_id, msg_id, data['sentences'], data['source_lang'], idx, cache)
+        bot.edit_message_text(cache[str(idx)], chat_id, msg_id, reply_markup=get_keyboard(msg_id, idx, len(data['sentences'])))
         
     bot.answer_callback_query(call.id)
 

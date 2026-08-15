@@ -70,20 +70,7 @@ def get_ai_analysis(sentence, source_lang):
     
     )
    
-#    try:
-#        response = ai_client.chat.completions.create(
-#            model="llama-3.3-70b-versatile",
-#            messages=[{"role": "user", "content": prompt}]
-#        )
-#        return response.choices[0].message.content
-#    except Exception:
-#        response = ai_client.chat.completions.create(
-#            model="llama-3.1-8b-instant",
-#            messages=[{"role": "user", "content": prompt}]
-#        )
-#        return response.choices[0].message.content
-
-try:
+    try:
         response = ai_client.chat.completions.create(
             model="openai/gpt-oss-120b",
             messages=[{"role": "user", "content": prompt}]

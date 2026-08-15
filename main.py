@@ -69,19 +69,33 @@ def get_ai_analysis(sentence, source_lang):
         f"💡 [Краткий грамматический разбор, максимум 4-5 предложений]"
     
     )
-    
-    try:
+   
+#    try:
+#        response = ai_client.chat.completions.create(
+#            model="llama-3.3-70b-versatile",
+#            messages=[{"role": "user", "content": prompt}]
+#        )
+#        return response.choices[0].message.content
+#    except Exception:
+#        response = ai_client.chat.completions.create(
+#            model="llama-3.1-8b-instant",
+#            messages=[{"role": "user", "content": prompt}]
+#        )
+#        return response.choices[0].message.content
+
+try:
         response = ai_client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
+            model="openai/gpt-oss-120b",
             messages=[{"role": "user", "content": prompt}]
         )
         return response.choices[0].message.content
     except Exception:
         response = ai_client.chat.completions.create(
-            model="llama-3.1-8b-instant",
+            model="qwen/qwen3.6-27b",
             messages=[{"role": "user", "content": prompt}]
         )
         return response.choices[0].message.content
+
 
 def save_book_to_db(chat_id, message_id, sentences, source_lang, idx, cache):
     url = f"{SUPABASE_URL}/rest/v1/book_sessions"

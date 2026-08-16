@@ -62,9 +62,9 @@ def get_keyboard(message_id, idx, total):
 def get_ai_analysis(sentence, source_lang):
     # Выбираем шаблон промпта из переменных окружения Render
     if source_lang == "de":
-        prompt_template = os.getenv("DE_PROMPT", "Разбери немецкое предложение: {sentence}")
+        prompt_template = os.getenv("DE_PROMPT")
     else:
-        prompt_template = os.getenv("EN_PROMPT", "Разбери английское предложение: {sentence}")
+        prompt_template = os.getenv("EN_PROMPT")
     
     # Подставляем само предложение в шаблон
     prompt = prompt_template.format(sentence=sentence)

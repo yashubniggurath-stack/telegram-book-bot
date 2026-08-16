@@ -58,18 +58,17 @@ def get_keyboard(message_id, idx, total):
         markup.row(*buttons)
     return markup
 
+
 def get_ai_analysis(sentence, source_lang):
-    lang_name = "немецкого" if source_lang == "de" else "английского"
-    prompt = (
-        f"Ты — личный репетитор по языкам для уровня A2. "
-        f"Разбери это предложение из книги (исходный язык — {lang_name}): \"{sentence}\"\n\n"
-        f"Ответь cтрого без иероглифов и строго в формате:\n"
-        f"🇷🇺 [Естественный перевод на русский]\n"
-        f"—————————————————\n"
-        f"💡 [Краткий грамматический разбор, максимум 4-5 предложений]"
+    # Выбираем шаблон промпта из переменных окружения Render
+    if source_lang == "de":
+        prompt_template = os.getenv("DE_PROMPT", "Разбери немецкое предложение: {sentence}")
+    else:
+        prompt_template = os.getenv("EN_PROMPT", "Разбери английское предложение: {sentence}")
     
-    )
-   
+    # Подставляем само предложение в шаблон
+    prompt = prompt_template.format(sentence=sentence)
+    
     try:
         response = ai_client.chat.completions.create(
             model="openai/gpt-oss-120b",

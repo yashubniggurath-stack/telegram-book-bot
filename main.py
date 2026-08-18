@@ -3,6 +3,9 @@ import telebot
 import re
 import requests
 import threading
+import asyncio
+from io import BytesIO
+import edge_tts
 from flask import Flask
 from openai import OpenAI
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -60,13 +63,11 @@ def get_keyboard(message_id, idx, total):
 
 
 def get_ai_analysis(sentence, source_lang):
-    # Выбираем шаблон промпта из переменных окружения Render
     if source_lang == "de":
         prompt_template = os.getenv("DE_PROMPT")
     else:
         prompt_template = os.getenv("EN_PROMPT")
     
-    # Подставляем само предложение в шаблон
     prompt = prompt_template.format(sentence=sentence)
     
     try:
@@ -81,6 +82,21 @@ def get_ai_analysis(sentence, source_lang):
             messages=[{"role": "user", "content": prompt}]
         )
         return response.choices[0].message.content
+
+
+# Функция генерации аудио во временную память через edge-tts
+async def generate_voice_bytes(text, lang="en"):
+    voice = "en-US-AriaNeural" if lang == "en" else "de-DE-KatjaNeural"
+    
+    communicate = edge_tts.Communicate(text, voice)
+    audio_data = BytesIO()
+    
+    async for chunk in communicate.stream():
+        if chunk["type"] == "audio":
+            audio_data.write(chunk["data"])
+            
+    audio_data.seek(0)
+    return audio_data
 
 
 def save_book_to_db(chat_id, message_id, sentences, source_lang, idx, cache):
@@ -119,12 +135,20 @@ def callback_handler(call):
         text = temp_storage.get(chat_id)
         sentences = split_into_sentences(text)
         
-        ai_resp = get_ai_analysis(sentences[0], lang)
+        current_sentence = sentences[0]
+        ai_resp = get_ai_analysis(current_sentence, lang)
         flag = "🇩🇪" if lang == "de" else "🇬🇧"
-        final_text = f"{flag} {sentences[0]}\n\n{ai_resp}"
+        final_text = f"{flag} {current_sentence}\n\n{ai_resp}"
         
+        # Сохраняем сессию
         save_book_to_db(chat_id, call.message.message_id, sentences, lang, 0, {"0": final_text})
+        
+        # Обновляем сообщение с текстом
         bot.edit_message_text(final_text, chat_id, call.message.message_id, reply_markup=get_keyboard(call.message.message_id, 0, len(sentences)))
+        
+        # Генерируем и отправляем озвучку отдельной голосовухой
+        audio_io = asyncio.run(generate_voice_bytes(current_sentence, lang))
+        bot.send_voice(chat_id, audio_io)
         
     elif call.data.startswith("book:"):
         _, msg_id, action = call.data.split(":")
@@ -143,13 +167,22 @@ def callback_handler(call):
             return
             
         cache = data['cache']
+        current_sentence = data['sentences'][idx]
+        lang = data['source_lang']
+        
         if str(idx) not in cache:
-            ai_resp = get_ai_analysis(data['sentences'][idx], data['source_lang'])
-            flag = "🇩🇪" if data['source_lang'] == "de" else "🇬🇧"
-            cache[str(idx)] = f"{flag} {data['sentences'][idx]}\n\n{ai_resp}"
+            ai_resp = get_ai_analysis(current_sentence, lang)
+            flag = "🇩🇪" if lang == "de" else "🇬🇧"
+            cache[str(idx)] = f"{flag} {current_sentence}\n\n{ai_resp}"
             
-        save_book_to_db(chat_id, msg_id, data['sentences'], data['source_lang'], idx, cache)
+        save_book_to_db(chat_id, msg_id, data['sentences'], lang, idx, cache)
+        
+        # Обновляем текст разбора
         bot.edit_message_text(cache[str(idx)], chat_id, msg_id, reply_markup=get_keyboard(msg_id, idx, len(data['sentences'])))
+        
+        # Отправляем новую голосовуху под текущее предложение
+        audio_io = asyncio.run(generate_voice_bytes(current_sentence, lang))
+        bot.send_voice(chat_id, audio_io)
         
     bot.answer_callback_query(call.id)
 

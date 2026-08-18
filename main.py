@@ -61,7 +61,6 @@ def get_keyboard(message_id, idx, total):
         markup.row(*buttons)
     return markup
 
-
 def get_ai_analysis(sentence, source_lang):
     if source_lang == "de":
         prompt_template = os.getenv("DE_PROMPT")
@@ -83,7 +82,6 @@ def get_ai_analysis(sentence, source_lang):
         )
         return response.choices[0].message.content
 
-
 # Функция генерации аудио во временную память через edge-tts
 async def generate_voice_bytes(text, lang="en"):
     voice = "en-US-AriaNeural" if lang == "en" else "de-DE-KatjaNeural"
@@ -98,12 +96,24 @@ async def generate_voice_bytes(text, lang="en"):
     audio_data.seek(0)
     return audio_data
 
-
-def save_book_to_db(chat_id, message_id, sentences, source_lang, idx, cache):
+def save_book_to_db(chat_id, message_id, sentences, source_lang, idx, cache, last_audio_id=None):
     url = f"{SUPABASE_URL}/rest/v1/book_sessions"
-    payload = {"chat_id": chat_id, "message_id": message_id, "sentences": sentences, 
-               "source_lang": source_lang, "current_index": idx, "cache": cache}
+    payload = {
+        "chat_id": chat_id, 
+        "message_id": message_id, 
+        "sentences": sentences, 
+        "source_lang": source_lang, 
+        "current_index": idx, 
+        "cache": cache
+    }
+    if last_audio_id is not None:
+        payload["last_audio_id"] = last_audio_id
     requests.post(url, headers=headers, json=payload)
+
+def update_last_audio_id(msg_id, new_audio_id):
+    url = f"{SUPABASE_URL}/rest/v1/book_sessions?message_id=eq.{msg_id}"
+    payload = {"last_audio_id": new_audio_id}
+    requests.patch(url, headers=headers, json=payload)
 
 @bot.message_handler(commands=['start'])
 def func_start(message):
@@ -129,6 +139,7 @@ def handle_input(message):
 @bot.callback_query_handler(func=lambda call: True)
 def callback_handler(call):
     chat_id = call.message.chat.id
+    msg_id = call.message.message_id
     
     if call.data.startswith("lang:"):
         lang = call.data.split(":")[1]
@@ -140,22 +151,26 @@ def callback_handler(call):
         flag = "🇩🇪" if lang == "de" else "🇬🇧"
         final_text = f"{flag} {current_sentence}\n\n{ai_resp}"
         
-        # Сохраняем сессию
-        save_book_to_db(chat_id, call.message.message_id, sentences, lang, 0, {"0": final_text})
-        
-        # Обновляем сообщение с текстом
-        bot.edit_message_text(final_text, chat_id, call.message.message_id, reply_markup=get_keyboard(call.message.message_id, 0, len(sentences)))
-        
-        # Генерируем и отправляем озвучку отдельной голосовухой
+        # Генерируем и отправляем аудио СВЕРХУ (первым сообщением)
         audio_io = asyncio.run(generate_voice_bytes(current_sentence, lang))
-        bot.send_voice(chat_id, audio_io)
+        audio_msg = bot.send_voice(chat_id, audio_io)
+        
+        # Сохраняем сессию в базу вместе с ID отправленного аудио
+        save_book_to_db(chat_id, msg_id, sentences, lang, 0, {"0": final_text}, last_audio_id=audio_msg.message_id)
+        
+        # Отправляем текст разбора с кнопками под аудио
+        bot.edit_message_text(final_text, chat_id, msg_id, reply_markup=get_keyboard(msg_id, 0, len(sentences)))
         
     elif call.data.startswith("book:"):
-        _, msg_id, action = call.data.split(":")
-        msg_id = int(msg_id)
+        _, target_msg_id, action = call.data.split(":")
+        target_msg_id = int(target_msg_id)
         
-        url = f"{SUPABASE_URL}/rest/v1/book_sessions?message_id=eq.{msg_id}"
-        data = requests.get(url, headers=headers).json()[0]
+        url = f"{SUPABASE_URL}/rest/v1/book_sessions?message_id=eq.{target_msg_id}"
+        response_data = requests.get(url, headers=headers).json()
+        if not response_data:
+            bot.answer_callback_query(call.id, "Сессия не найдена.")
+            return
+        data = response_data[0]
         
         idx = data['current_index']
         if action == "next" and idx < len(data['sentences']) - 1:
@@ -174,15 +189,24 @@ def callback_handler(call):
             ai_resp = get_ai_analysis(current_sentence, lang)
             flag = "🇩🇪" if lang == "de" else "🇬🇧"
             cache[str(idx)] = f"{flag} {current_sentence}\n\n{ai_resp}"
-            
-        save_book_to_db(chat_id, msg_id, data['sentences'], lang, idx, cache)
         
-        # Обновляем текст разбора
-        bot.edit_message_text(cache[str(idx)], chat_id, msg_id, reply_markup=get_keyboard(msg_id, idx, len(data['sentences'])))
-        
-        # Отправляем новую голосовуху под текущее предложение
+        # 1. Удаляем старое аудио этой книги, если оно было записано
+        old_audio_id = data.get('last_audio_id')
+        if old_audio_id:
+            try:
+                bot.delete_message(chat_id, old_audio_id)
+            except Exception:
+                pass
+                
+        # 2. Генерируем и отправляем новое аудио
         audio_io = asyncio.run(generate_voice_bytes(current_sentence, lang))
-        bot.send_voice(chat_id, audio_io)
+        new_audio_msg = bot.send_voice(chat_id, audio_io)
+        
+        # 3. Обновляем индекс, кэш и ID нового аудио в базе
+        save_book_to_db(chat_id, target_msg_id, data['sentences'], lang, idx, cache, last_audio_id=new_audio_msg.message_id)
+        
+        # 4. Обновляем текст разбора
+        bot.edit_message_text(cache[str(idx)], chat_id, target_msg_id, reply_markup=get_keyboard(target_msg_id, idx, len(data['sentences'])))
         
     bot.answer_callback_query(call.id)
 

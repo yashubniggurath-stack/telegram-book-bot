@@ -82,11 +82,17 @@ def get_ai_analysis(sentence, source_lang):
         )
         return response.choices[0].message.content
 
+
 # Функция генерации аудио во временную память через edge-tts
 async def generate_voice_bytes(text, lang="en"):
-    voice = "en-US-AriaNeural" if lang == "en" else "de-DE-KatjaNeural"
-    
-    communicate = edge_tts.Communicate(text, voice)
+    if lang == "en":
+        voice = "en-GB-SoniaNeural"
+        # Делаем темп медленнее и неспешнее с помощью rate (например, -15%)
+        communicate = edge_tts.Communicate(text, voice, rate="-15%")
+    else:
+        voice = "de-DE-KatjaNeural"
+        communicate = edge_tts.Communicate(text, voice)
+        
     audio_data = BytesIO()
     
     async for chunk in communicate.stream():
@@ -95,6 +101,7 @@ async def generate_voice_bytes(text, lang="en"):
             
     audio_data.seek(0)
     return audio_data
+
 
 def save_book_to_db(chat_id, message_id, sentences, source_lang, idx, cache, last_audio_id=None):
     url = f"{SUPABASE_URL}/rest/v1/book_sessions"

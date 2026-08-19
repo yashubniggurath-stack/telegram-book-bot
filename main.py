@@ -86,9 +86,9 @@ def get_ai_analysis(sentence, source_lang):
 # Функция генерации аудио во временную память через edge-tts
 async def generate_voice_bytes(text, lang="en"):
     if lang == "en":
-        voice = "en-GB-SoniaNeural"
+        voice = "en-US-EmmaNeural"
         # Делаем темп медленнее и неспешнее с помощью rate (например, -15%)
-        communicate = edge_tts.Communicate(text, voice, rate="-15%")
+        communicate = edge_tts.Communicate(text, voice, rate="-10%")
     else:
         voice = "de-DE-KatjaNeural"
         communicate = edge_tts.Communicate(text, voice)

@@ -88,7 +88,7 @@ async def generate_voice_bytes(text, lang="en"):
     if lang == "en":
         voice = "en-US-EmmaNeural"
         # Делаем темп медленнее и неспешнее с помощью rate (например, -15%)
-        communicate = edge_tts.Communicate(text, voice, rate="-10%")
+        communicate = edge_tts.Communicate(text, voice, rate="-25%")
     else:
         voice = "de-DE-KatjaNeural"
         communicate = edge_tts.Communicate(text, voice)
